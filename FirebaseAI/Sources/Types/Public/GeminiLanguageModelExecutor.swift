@@ -201,10 +201,10 @@ import FoundationModels
           switch samplingMode.kind {
           case .greedy:
             generationConfig.temperature = 0.0
-          case let .top(k, seed):
+          case let .randomTopK(k, seed):
             generationConfig.topK = k
             generationConfig.seed = seed.map { Int(truncatingIfNeeded: $0) }
-          case let .nucleus(threshold, seed):
+          case let .randomProbabilityThreshold(threshold, seed):
             generationConfig.topP = Float(threshold)
             generationConfig.seed = seed.map { Int(truncatingIfNeeded: $0) }
           @unknown default:
@@ -485,9 +485,7 @@ import FoundationModels
             await channel.send(
               .response(
                 entryID: responseEntryID,
-                action: .updateUsage(
-                  .init(input: input, output: output)
-                )
+                action: .updateUsage(input: input, output: output)
               )
             )
           }
