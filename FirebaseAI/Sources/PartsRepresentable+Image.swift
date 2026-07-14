@@ -78,8 +78,7 @@ enum ImageConversionError: Error {
       ) else {
         return [ErrorPart(ImageConversionError.couldNotAllocateDestination)]
       }
-      CGImageDestinationAddImage(imageDestination, self, nil)
-      CGImageDestinationSetProperties(imageDestination, [
+      CGImageDestinationAddImage(imageDestination, self, [
         kCGImageDestinationLossyCompressionQuality: imageCompressionQuality,
       ] as CFDictionary)
       if CGImageDestinationFinalize(imageDestination) {

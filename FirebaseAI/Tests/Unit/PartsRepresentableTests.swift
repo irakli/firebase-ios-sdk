@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 #if canImport(UIKit)
   import UIKit
@@ -27,24 +29,63 @@ import XCTest
 
 final class PartsRepresentableTests: XCTestCase {
   #if !os(watchOS)
-    func testModelContentFromCGImageIsNotEmpty() throws {
-      // adapted from https://forums.swift.org/t/creating-a-cgimage-from-color-array/18634/2
-      var srgbArray = [UInt32](repeating: 0xFFFF_FFFF, count: 8 * 8)
-      let image = srgbArray.withUnsafeMutableBytes { ptr -> CGImage in
-        let ctx = CGContext(
-          data: ptr.baseAddress,
-          width: 8,
-          height: 8,
-          bitsPerComponent: 8,
-          bytesPerRow: 4 * 8,
-          space: CGColorSpace(name: CGColorSpace.sRGB)!,
-          bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue +
-            CGImageAlphaInfo.premultipliedFirst.rawValue
-        )!
-        return ctx.makeImage()!
-      }
+    func testModelContentFromCGImageUsesConfiguredJPEGCompressionQuality() throws {
+      let image = try makeCGImage(width: 128, height: 128)
+
       let modelContent = image.partsValue
-      XCTAssert(modelContent.count > 0, "Expected non-empty model content for CGImage: \(image)")
+
+      XCTAssertEqual(modelContent.count, 1)
+      let imagePart = try XCTUnwrap(modelContent.first as? InlineDataPart)
+      XCTAssertEqual(imagePart.mimeType, "image/jpeg")
+      XCTAssertEqual(imagePart.data, try jpegData(from: image, compressionQuality: 0.8))
+
+      let source = try XCTUnwrap(CGImageSourceCreateWithData(imagePart.data as CFData, nil))
+      let decodedImage = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+      XCTAssertEqual(decodedImage.width, image.width)
+      XCTAssertEqual(decodedImage.height, image.height)
+    }
+
+    private func makeCGImage(width: Int, height: Int) throws -> CGImage {
+      var pixels = [UInt8](repeating: 0, count: width * height * 4)
+      for y in 0 ..< height {
+        for x in 0 ..< width {
+          let offset = (y * width + x) * 4
+          pixels[offset] = UInt8((x * 37 + y * 11) % 256)
+          pixels[offset + 1] = UInt8((x * 13 + y * 29) % 256)
+          pixels[offset + 2] = UInt8((x * 7 + y * 43) % 256)
+          pixels[offset + 3] = 255
+        }
+      }
+      let provider = try XCTUnwrap(CGDataProvider(data: Data(pixels) as CFData))
+      let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+      return try XCTUnwrap(CGImage(
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: width * 4,
+        space: colorSpace,
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+      ))
+    }
+
+    private func jpegData(from image: CGImage, compressionQuality: CGFloat) throws -> Data {
+      let output = NSMutableData()
+      let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+        output,
+        UTType.jpeg.identifier as CFString,
+        1,
+        nil
+      ))
+      CGImageDestinationAddImage(destination, image, [
+        kCGImageDestinationLossyCompressionQuality: compressionQuality,
+      ] as CFDictionary)
+      XCTAssertTrue(CGImageDestinationFinalize(destination))
+      return output as Data
     }
   #endif // !os(watchOS)
 
