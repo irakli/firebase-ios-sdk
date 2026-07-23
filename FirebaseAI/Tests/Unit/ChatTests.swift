@@ -175,6 +175,51 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(chat.history.count, 0)
   }
 
+  func testSendMessageStream_cancellationDoesNotAppendHistory() async {
+    let stopped = expectation(description: "Underlying stream stopped")
+    let yielded = expectation(description: "Partial response yielded")
+    let partialResponse = GenerateContentResponse(candidates: [
+      Candidate(
+        content: ModelContent(role: "model", parts: "partial"),
+        safetyRatings: [],
+        finishReason: .stop,
+        citationMetadata: nil
+      ),
+    ])
+    let underlyingStream = AsyncThrowingStream<GenerateContentResponse, Error> { continuation in
+      continuation.onTermination = { _ in
+        stopped.fulfill()
+      }
+      continuation.yield(partialResponse)
+    }
+    let model = GenerativeModel(
+      modelName: modelName,
+      modelResourceName: modelResourceName,
+      firebaseInfo: GenerativeModelTestUtil.testFirebaseInfo(),
+      apiConfig: FirebaseAI.defaultVertexAIAPIConfig,
+      tools: nil,
+      requestOptions: RequestOptions(),
+      urlSession: urlSession
+    )
+    let chat = model.startChat()
+    let stream = chat.streamWithHistoryCommit(
+      underlyingStream,
+      newContent: [ModelContent(role: "user", parts: "PRIVATE_CHAT_PROMPT_SENTINEL")]
+    )
+    let consumer = Task {
+      for try await _ in stream {
+        yielded.fulfill()
+      }
+    }
+
+    await fulfillment(of: [yielded], timeout: 2)
+    consumer.cancel()
+    await fulfillment(of: [stopped], timeout: 2)
+    _ = await consumer.result
+
+    XCTAssertTrue(chat.history.isEmpty)
+  }
+
   func testStartChat_withHistory_initializesCorrectly() async throws {
     let history = [
       ModelContent(role: "user", parts: "Question 1"),

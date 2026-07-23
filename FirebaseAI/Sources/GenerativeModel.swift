@@ -353,6 +353,8 @@ public final class GenerativeModel: Sendable {
             }
           }
 
+          try Task.checkCancellation()
+
           // Throw an error if all responses were skipped due to empty content.
           if didYieldResponse {
             continuation.finish()

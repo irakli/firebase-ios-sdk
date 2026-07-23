@@ -143,12 +143,10 @@ enum InvalidCandidateError: Error {
   case malformedContent(underlyingError: Error)
 }
 
-struct UnrecognizedRPCError: Error {
-  let responseBody: String
-}
+struct UnrecognizedRPCError: Error {}
 
 extension UnrecognizedRPCError: LocalizedError {
   var errorDescription: String? {
-    return "Unrecognized error payload: \(responseBody)"
+    return "The Firebase AI service returned an unrecognized error payload."
   }
 }

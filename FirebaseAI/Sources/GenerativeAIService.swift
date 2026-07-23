@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import Foundation
-import os.log
 
 struct GenerativeAIService {
   let firebaseInfo: FirebaseInfo
@@ -27,12 +26,6 @@ struct GenerativeAIService {
 
   func loadRequest<T: GenerativeAIRequest>(request: T) async throws -> T.Response {
     let urlRequest = try await urlRequest(request: request)
-
-    #if DEBUG
-      if #available(macOS 11.0, *) {
-        printCURLCommand(from: urlRequest)
-      }
-    #endif
 
     let data: Data
     let rawResponse: URLResponse
@@ -60,75 +53,107 @@ struct GenerativeAIService {
   }
 
   @available(macOS 12.0, watchOS 8.0, *)
-  func loadRequestStream<T: GenerativeAIRequest>(request: T)
-    -> AsyncThrowingStream<T.Response, Error> where T: Sendable {
+  func loadRequestStream<T: GenerativeAIRequest & Sendable>(request: T)
+    -> AsyncThrowingStream<T.Response, Error> {
     return AsyncThrowingStream { continuation in
       let task = Task {
+        let urlRequest: URLRequest
         do {
-          let urlRequest = try await self.urlRequest(request: request)
+          urlRequest = try await self.urlRequest(request: request)
+        } catch {
+          continuation.finish(throwing: error)
+          return
+        }
 
-          #if DEBUG
-            printCURLCommand(from: urlRequest)
-          #endif
-
-          let stream: URLSession.AsyncBytes
-          let rawResponse: URLResponse
+        let stream: URLSession.AsyncBytes
+        let rawResponse: URLResponse
+        do {
           (stream, rawResponse) = try await urlSession.bytes(for: urlRequest)
+        } catch {
+          continuation.finish(throwing: error)
+          return
+        }
 
-          let response = try httpResponse(urlResponse: rawResponse)
+        // Verify the status code is 200
+        let response: HTTPURLResponse
+        do {
+          response = try httpResponse(urlResponse: rawResponse)
+        } catch {
+          continuation.finish(throwing: error)
+          return
+        }
 
-          // Verify the status code is 200
-          guard response.statusCode == 200 else {
-            AILog.error(
-              code: .loadRequestStreamResponseError,
-              "The server responded with an error: \(response)"
-            )
-            var responseBody = ""
+        // Verify the status code is 200
+        guard response.statusCode == 200 else {
+          AILog.error(
+            code: .loadRequestStreamResponseError,
+            "The server responded with an error: \(response)"
+          )
+          var responseBody = ""
+          do {
             for try await line in stream.lines {
               responseBody += line + "\n"
             }
-
-            AILog.error(
-              code: .loadRequestStreamResponseErrorPayload,
-              "Response payload: \(responseBody)"
-            )
-            continuation.finish(throwing: parseError(responseBody: responseBody))
+          } catch {
+            continuation.finish(throwing: error)
             return
           }
 
-          // Received lines that are not server-sent events (SSE); these are not prefixed with
-          // "data:"
-          var extraLines = ""
+          AILog.error(
+            code: .loadRequestStreamResponseErrorPayload,
+            "Response payload: \(responseBody)"
+          )
+          continuation.finish(throwing: parseError(responseBody: responseBody))
 
-          for try await line in stream.lines {
-            AILog.debug(code: .loadRequestStreamResponseLine, "Stream response: \(line)")
-
-            if line.hasPrefix("data:") {
-              // We can assume 5 characters since it's utf-8 encoded, removing `data:`.
-              let jsonText = String(line.dropFirst(5))
-              let data = try jsonData(jsonText: jsonText)
-              let content = try parseResponse(T.Response.self, from: data)
-              continuation.yield(content)
-            } else {
-              extraLines += line
-            }
-          }
-
-          if extraLines.count > 0 {
-            continuation.finish(throwing: parseError(responseBody: extraLines))
-            return
-          }
-
-          continuation.finish(throwing: nil)
-        } catch {
-          continuation.finish(throwing: error)
+          return
         }
-      }
 
+        await processSuccessfulResponseLines(
+          stream.lines,
+          responseType: T.Response.self,
+          continuation: continuation
+        )
+      }
       continuation.onTermination = { @Sendable _ in
         task.cancel()
       }
     }
+  }
+
+  func processSuccessfulResponseLines<Response: Decodable & Sendable, Lines: AsyncSequence>(
+    _ lines: Lines,
+    responseType: Response.Type,
+    continuation: AsyncThrowingStream<Response, Error>.Continuation
+  ) async where Lines.Element == String {
+    // Received lines that are not server-sent events (SSE); these are not prefixed with "data:"
+    var extraLines = ""
+
+    do {
+      for try await line in lines {
+        AILog.debug(code: .loadRequestStreamResponseLine, "Stream response: \(line)")
+
+        if line.hasPrefix("data:") {
+          // We can assume 5 characters since it's utf-8 encoded, removing `data:`.
+          let jsonText = String(line.dropFirst(5))
+          let data = try jsonData(jsonText: jsonText)
+          let content = try parseResponse(responseType, from: data)
+          continuation.yield(content)
+        } else {
+          extraLines += line
+        }
+      }
+      try Task.checkCancellation()
+    } catch {
+      continuation.finish(throwing: error)
+      return
+    }
+
+    if extraLines.count > 0 {
+      continuation.finish(throwing: parseError(responseBody: extraLines))
+      return
+    }
+
+    continuation.finish(throwing: nil)
   }
 
   // MARK: - Private Helpers
@@ -192,8 +217,7 @@ struct GenerativeAIService {
       logRPCError(rpcError)
       return rpcError
     } catch {
-      let responseString = String(data: responseData, encoding: .utf8) ?? ""
-      return UnrecognizedRPCError(responseBody: responseString)
+      return UnrecognizedRPCError()
     }
   }
 
@@ -227,40 +251,4 @@ struct GenerativeAIService {
       throw error
     }
   }
-
-  #if DEBUG
-    @available(macOS 11.0, *)
-    private func cURLCommand(from request: URLRequest) -> String {
-      var returnValue = "curl "
-      if let allHeaders = request.allHTTPHeaderFields {
-        for (key, value) in allHeaders {
-          returnValue += "-H '\(key): \(value)' "
-        }
-      }
-
-      guard let url = request.url else { return "" }
-      returnValue += "'\(url.absoluteString)' "
-
-      guard let body = request.httpBody,
-            let jsonStr = String(bytes: body, encoding: .utf8) else { return "" }
-      let escapedJSON = jsonStr.replacingOccurrences(of: "'", with: "'\\''")
-      returnValue += "-d '\(escapedJSON)'"
-
-      return returnValue
-    }
-
-    @available(macOS 11.0, *)
-    private func printCURLCommand(from request: URLRequest) {
-      guard AILog.additionalLoggingEnabled() else {
-        return
-      }
-      let command = cURLCommand(from: request)
-      os_log(.debug, log: AILog.logObject, """
-      \(AILog.service) Creating request with the equivalent cURL command:
-      ----- cURL command -----
-      \(command, privacy: .private)
-      ------------------------
-      """)
-    }
-  #endif // DEBUG
 }

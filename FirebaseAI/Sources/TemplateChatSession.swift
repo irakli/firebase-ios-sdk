@@ -62,6 +62,7 @@ final class TemplateChatSession: Sendable {
       inputs: templateInputs,
       options: options
     )
+    try Task.checkCancellation()
     _history.append(contentsOf: newContent)
     if let modelResponse = response.candidates.first {
       _history.append(modelResponse.content)
@@ -114,8 +115,16 @@ final class TemplateChatSession: Sendable {
       inputs: templateInputs,
       options: options
     )
+    return streamWithHistoryCommit(stream, newContent: newContent)
+  }
+
+  @available(macOS 12.0, watchOS 8.0, *)
+  func streamWithHistoryCommit(
+    _ stream: AsyncThrowingStream<GenerateContentResponse, Error>,
+    newContent: [ModelContent]
+  ) -> AsyncThrowingStream<GenerateContentResponse, Error> {
     return AsyncThrowingStream { continuation in
-      Task {
+      let task = Task {
         var aggregatedContent: [ModelContent] = []
 
         do {
@@ -134,6 +143,11 @@ final class TemplateChatSession: Sendable {
           return
         }
 
+        guard !Task.isCancelled else {
+          continuation.finish(throwing: CancellationError())
+          return
+        }
+
         // Save the request.
         _history.append(contentsOf: newContent)
 
@@ -141,6 +155,9 @@ final class TemplateChatSession: Sendable {
         let aggregated = _history.aggregatedChunks(aggregatedContent)
         _history.append(aggregated)
         continuation.finish()
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
       }
     }
   }

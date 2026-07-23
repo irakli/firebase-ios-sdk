@@ -118,4 +118,40 @@ final class TemplateChatSessionTests: XCTestCase {
     XCTAssertEqual((chat.history[0].parts.first as? TextPart)?.text, "Hello")
     XCTAssertEqual(chat.history[1].role, "model")
   }
+
+  func testSendMessageStream_cancellationDoesNotAppendHistory() async {
+    let stopped = expectation(description: "Underlying stream stopped")
+    let yielded = expectation(description: "Partial response yielded")
+    let partialResponse = GenerateContentResponse(candidates: [
+      Candidate(
+        content: ModelContent(role: "model", parts: "partial"),
+        safetyRatings: [],
+        finishReason: .stop,
+        citationMetadata: nil
+      ),
+    ])
+    let underlyingStream = AsyncThrowingStream<GenerateContentResponse, Error> { continuation in
+      continuation.onTermination = { _ in
+        stopped.fulfill()
+      }
+      continuation.yield(partialResponse)
+    }
+    let chat = model.startChat(templateID: "test-template")
+    let stream = chat.streamWithHistoryCommit(
+      underlyingStream,
+      newContent: [ModelContent(role: "user", parts: "PRIVATE_TEMPLATE_CHAT_PROMPT_SENTINEL")]
+    )
+    let consumer = Task {
+      for try await _ in stream {
+        yielded.fulfill()
+      }
+    }
+
+    await fulfillment(of: [yielded], timeout: 2)
+    consumer.cancel()
+    await fulfillment(of: [stopped], timeout: 2)
+    _ = await consumer.result
+
+    XCTAssertTrue(chat.history.isEmpty)
+  }
 }

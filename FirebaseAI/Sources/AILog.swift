@@ -15,7 +15,6 @@
 import FirebaseCore
 internal import FirebaseCoreExtension
 import Foundation
-import os.log
 
 enum AILog {
   /// Log message codes for the Firebase AI SDK
@@ -102,26 +101,64 @@ enum AILog {
   /// > Note: This corresponds to the `category` in `OSLog`.
   static let service = "[FirebaseAI]"
 
-  /// The raw `OSLog` log object.
-  ///
-  /// > Important: This is only needed for direct `os_log` usage.
-  static let logObject = OSLog(subsystem: subsystem, category: service)
-
   /// The argument required to enable additional logging.
   static let enableArgumentKey = "-FIRDebugEnabled"
 
   #if DEBUG
+    typealias LogInterceptor = (FirebaseLoggerLevel, MessageCode, String) -> Void
+
     /// A callback closure used to intercept log emissions during unit testing.
     ///
     /// This property is only available in debug builds to facilitate testing without external
     /// dependencies.
-    nonisolated(unsafe) static var logInterceptor: ((FirebaseLoggerLevel, MessageCode, String)
-      -> Void)?
+    private static let logInterceptorLock = NSLock()
+    private nonisolated(unsafe) static var legacyLogInterceptor: LogInterceptor?
+    private nonisolated(unsafe) static var scopedLogInterceptors: [UUID: LogInterceptor] = [:]
+
+    static var logInterceptor: LogInterceptor? {
+      get {
+        logInterceptorLock.lock()
+        defer { logInterceptorLock.unlock() }
+        return legacyLogInterceptor
+      }
+      set {
+        logInterceptorLock.lock()
+        legacyLogInterceptor = newValue
+        logInterceptorLock.unlock()
+      }
+    }
+
+    static func addLogInterceptor(_ interceptor: @escaping LogInterceptor) -> UUID {
+      let id = UUID()
+      logInterceptorLock.lock()
+      scopedLogInterceptors[id] = interceptor
+      logInterceptorLock.unlock()
+      return id
+    }
+
+    static func removeLogInterceptor(_ id: UUID) {
+      logInterceptorLock.lock()
+      scopedLogInterceptors[id] = nil
+      logInterceptorLock.unlock()
+    }
+
+    private static func logInterceptors() -> [LogInterceptor] {
+      logInterceptorLock.lock()
+      defer { logInterceptorLock.unlock() }
+      return [legacyLogInterceptor].compactMap { $0 } + Array(scopedLogInterceptors.values)
+    }
   #endif
 
   static func log(level: FirebaseLoggerLevel, code: MessageCode, _ message: String) {
+    // Never pass caller-supplied text to a logger. AI log call sites may interpolate prompts,
+    // responses, credentials, identifiers, or provider errors. The closed numeric event code is
+    // the only diagnostic payload safe to retain.
+    _ = message
+    let sourceFreeMessage = sourceFreeMessage(for: code)
     #if DEBUG
-      logInterceptor?(level, code, message)
+      for interceptor in logInterceptors() {
+        interceptor(level, code, sourceFreeMessage)
+      }
     #endif
 
     let messageCode = String(format: "I-VTX%06d", code.rawValue)
@@ -129,8 +166,12 @@ enum AILog {
       level: level,
       service: AILog.service,
       code: messageCode,
-      message: message
+      message: sourceFreeMessage
     )
+  }
+
+  static func sourceFreeMessage(for code: MessageCode) -> String {
+    return "Firebase AI event \(code.rawValue)."
   }
 
   static func error(code: MessageCode, _ message: String) {
