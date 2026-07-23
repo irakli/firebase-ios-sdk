@@ -87,6 +87,7 @@ public final class Chat: Sendable {
     // Send the history alongside the new message as context.
     let request = history + newContent
     let result = try await model.generateContent(request, generationConfig: generationConfig)
+    try Task.checkCancellation()
     guard let reply = result.candidates.first?.content else {
       let error = NSError(domain: "com.google.generative-ai",
                           code: -1,
@@ -114,8 +115,16 @@ public final class Chat: Sendable {
     // Send the history alongside the new message as context.
     let request = history + newContent
     let stream = try model.generateContentStream(request, generationConfig: generationConfig)
+    return streamWithHistoryCommit(stream, newContent: newContent)
+  }
+
+  @available(macOS 12.0, watchOS 8.0, *)
+  func streamWithHistoryCommit(
+    _ stream: AsyncThrowingStream<GenerateContentResponse, Error>,
+    newContent: [ModelContent]
+  ) -> AsyncThrowingStream<GenerateContentResponse, Error> {
     return AsyncThrowingStream { continuation in
-      Task {
+      let task = Task {
         var aggregatedContent: [ModelContent] = []
 
         do {
@@ -134,6 +143,11 @@ public final class Chat: Sendable {
           return
         }
 
+        guard !Task.isCancelled else {
+          continuation.finish(throwing: CancellationError())
+          return
+        }
+
         // Save the request.
         _history.append(contentsOf: newContent)
 
@@ -141,6 +155,9 @@ public final class Chat: Sendable {
         let aggregated = self._history.aggregatedChunks(aggregatedContent)
         self._history.append(aggregated)
         continuation.finish()
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
       }
     }
   }

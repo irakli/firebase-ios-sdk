@@ -16,7 +16,6 @@ import FirebaseAppCheckInterop
 import FirebaseAuthInterop
 import FirebaseCore
 import Foundation
-import os.log
 
 struct GenerativeAIService {
   /// The language of the SDK in the format `gl-<language>/<version>`.
@@ -36,12 +35,6 @@ struct GenerativeAIService {
 
   func loadRequest<T: GenerativeAIRequest>(request: T) async throws -> T.Response {
     let urlRequest = try await urlRequest(request: request)
-
-    #if DEBUG
-      if #available(macOS 11.0, *) {
-        printCURLCommand(from: urlRequest)
-      }
-    #endif
 
     let data: Data
     let rawResponse: URLResponse
@@ -69,10 +62,10 @@ struct GenerativeAIService {
   }
 
   @available(macOS 12.0, watchOS 8.0, *)
-  func loadRequestStream<T: GenerativeAIRequest>(request: T)
-    -> AsyncThrowingStream<T.Response, Error> where T: Sendable {
+  func loadRequestStream<T: GenerativeAIRequest & Sendable>(request: T)
+    -> AsyncThrowingStream<T.Response, Error> {
     return AsyncThrowingStream { continuation in
-      Task {
+      let task = Task {
         let urlRequest: URLRequest
         do {
           urlRequest = try await self.urlRequest(request: request)
@@ -80,10 +73,6 @@ struct GenerativeAIService {
           continuation.finish(throwing: error)
           return
         }
-
-        #if DEBUG
-          printCURLCommand(from: urlRequest)
-        #endif
 
         let stream: URLSession.AsyncBytes
         let rawResponse: URLResponse
@@ -110,8 +99,13 @@ struct GenerativeAIService {
             "The server responded with an error: \(response)"
           )
           var responseBody = ""
-          for try await line in stream.lines {
-            responseBody += line + "\n"
+          do {
+            for try await line in stream.lines {
+              responseBody += line + "\n"
+            }
+          } catch {
+            continuation.finish(throwing: error)
+            return
           }
 
           AILog.error(
@@ -123,44 +117,52 @@ struct GenerativeAIService {
           return
         }
 
-        // Received lines that are not server-sent events (SSE); these are not prefixed with "data:"
-        var extraLines = ""
-
-        for try await line in stream.lines {
-          AILog.debug(code: .loadRequestStreamResponseLine, "Stream response: \(line)")
-
-          if line.hasPrefix("data:") {
-            // We can assume 5 characters since it's utf-8 encoded, removing `data:`.
-            let jsonText = String(line.dropFirst(5))
-            let data: Data
-            do {
-              data = try jsonData(jsonText: jsonText)
-            } catch {
-              continuation.finish(throwing: error)
-              return
-            }
-
-            // Handle the content.
-            do {
-              let content = try parseResponse(T.Response.self, from: data)
-              continuation.yield(content)
-            } catch {
-              continuation.finish(throwing: error)
-              return
-            }
-          } else {
-            extraLines += line
-          }
-        }
-
-        if extraLines.count > 0 {
-          continuation.finish(throwing: parseError(responseBody: extraLines))
-          return
-        }
-
-        continuation.finish(throwing: nil)
+        await processSuccessfulResponseLines(
+          stream.lines,
+          responseType: T.Response.self,
+          continuation: continuation
+        )
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
       }
     }
+  }
+
+  func processSuccessfulResponseLines<Response: Decodable & Sendable, Lines: AsyncSequence>(
+    _ lines: Lines,
+    responseType: Response.Type,
+    continuation: AsyncThrowingStream<Response, Error>.Continuation
+  ) async where Lines.Element == String {
+    // Received lines that are not server-sent events (SSE); these are not prefixed with "data:"
+    var extraLines = ""
+
+    do {
+      for try await line in lines {
+        AILog.debug(code: .loadRequestStreamResponseLine, "Stream response: \(line)")
+
+        if line.hasPrefix("data:") {
+          // We can assume 5 characters since it's utf-8 encoded, removing `data:`.
+          let jsonText = String(line.dropFirst(5))
+          let data = try jsonData(jsonText: jsonText)
+          let content = try parseResponse(responseType, from: data)
+          continuation.yield(content)
+        } else {
+          extraLines += line
+        }
+      }
+      try Task.checkCancellation()
+    } catch {
+      continuation.finish(throwing: error)
+      return
+    }
+
+    if extraLines.count > 0 {
+      continuation.finish(throwing: parseError(responseBody: extraLines))
+      return
+    }
+
+    continuation.finish(throwing: nil)
   }
 
   // MARK: - Private Helpers
@@ -270,8 +272,7 @@ struct GenerativeAIService {
       logRPCError(rpcError)
       return rpcError
     } catch {
-      let responseString = String(data: responseData, encoding: .utf8) ?? ""
-      return UnrecognizedRPCError(responseBody: responseString)
+      return UnrecognizedRPCError()
     }
   }
 
@@ -305,40 +306,4 @@ struct GenerativeAIService {
       throw error
     }
   }
-
-  #if DEBUG
-    @available(macOS 11.0, *)
-    private func cURLCommand(from request: URLRequest) -> String {
-      var returnValue = "curl "
-      if let allHeaders = request.allHTTPHeaderFields {
-        for (key, value) in allHeaders {
-          returnValue += "-H '\(key): \(value)' "
-        }
-      }
-
-      guard let url = request.url else { return "" }
-      returnValue += "'\(url.absoluteString)' "
-
-      guard let body = request.httpBody,
-            let jsonStr = String(bytes: body, encoding: .utf8) else { return "" }
-      let escapedJSON = jsonStr.replacingOccurrences(of: "'", with: "'\\''")
-      returnValue += "-d '\(escapedJSON)'"
-
-      return returnValue
-    }
-
-    @available(macOS 11.0, *)
-    private func printCURLCommand(from request: URLRequest) {
-      guard AILog.additionalLoggingEnabled() else {
-        return
-      }
-      let command = cURLCommand(from: request)
-      os_log(.debug, log: AILog.logObject, """
-      \(AILog.service) Creating request with the equivalent cURL command:
-      ----- cURL command -----
-      \(command, privacy: .private)
-      ------------------------
-      """)
-    }
-  #endif // DEBUG
 }

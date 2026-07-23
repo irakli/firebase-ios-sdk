@@ -128,6 +128,7 @@ enum GenerativeModelTestUtil {
 
   static func testFirebaseInfo(appCheck: AppCheckInterop? = nil,
                                auth: AuthInterop? = nil,
+                               apiKey: String = "API_KEY",
                                privateAppID: Bool = false,
                                useLimitedUseAppCheckTokens: Bool = false) -> FirebaseInfo {
     let app = FirebaseApp(instanceWithName: "testApp",
@@ -138,7 +139,7 @@ enum GenerativeModelTestUtil {
       appCheck: appCheck,
       auth: auth,
       projectID: "my-project-id",
-      apiKey: "API_KEY",
+      apiKey: apiKey,
       firebaseAppID: "My app ID",
       firebaseApp: app,
       useLimitedUseAppCheckTokens: useLimitedUseAppCheckTokens
