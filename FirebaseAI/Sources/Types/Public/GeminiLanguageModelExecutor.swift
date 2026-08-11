@@ -43,6 +43,30 @@ import FoundationModels
 
       static let placeholderIDPrefix = "placeholder-id-"
 
+      /// Renders a Codable metadata payload for the transcript. Xcode 27 beta 5 types transcript metadata
+      /// as `GeneratedContent`, so a value has to arrive as content rather than as itself; JSON keeps the
+      /// whole structure in one string. An unencodable value degrades to its description rather than
+      /// dropping the key, since the key is what tells a caller the metadata was present at all.
+      static func metadataValue(_ value: some Encodable) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let json = String(data: data, encoding: .utf8) else {
+          return String(describing: value)
+        }
+        return json
+      }
+
+      /// Records inline data the transcript cannot carry. Xcode 27 beta 5 removed the custom segment,
+      /// and the response channel's remaining actions carry text, image attachments, or metadata — so
+      /// bytes that are not a decodable image have nowhere to live. Naming the media type keeps the fact
+      /// that data arrived, which is what a caller can still act on, instead of dropping it in silence.
+      static func inlineDataMetadata(_ part: InlineDataPart)
+        -> LanguageModelExecutorGenerationChannel.Response.Action {
+        .updateMetadata([
+          "inlineDataMIMEType": part.mimeType,
+          "inlineDataByteCount": part.data.count,
+        ])
+      }
+
       public init(configuration: GeminiLanguageModel.ModelConfig) throws {
         firebaseAI = configuration.firebaseAI
         self.configuration = configuration
@@ -129,13 +153,6 @@ import FoundationModels
                 )
               )
 
-            case let .custom(customSegment):
-              throw LanguageModelError.unsupportedTranscriptContent(
-                LanguageModelError.UnsupportedTranscriptContent(
-                  unsupportedContent: [entry],
-                  debugDescription: "Unsupported custom segment in tool output: \(customSegment)"
-                )
-              )
 
             @unknown default:
               AILog.warning(
@@ -365,10 +382,10 @@ import FoundationModels
                     .image(imageAttachment))
                   action = .addAttachmentSegment(attachmentSegment)
                 } else {
-                  action = .updateCustomSegment(inlineDataPart)
+                  action = Executor.inlineDataMetadata(inlineDataPart)
                 }
               default:
-                action = .updateCustomSegment(inlineDataPart)
+                action = Executor.inlineDataMetadata(inlineDataPart)
               }
 
               await channel.send(.response(entryID: responseEntryID, action: action))
@@ -376,7 +393,10 @@ import FoundationModels
               await channel.send(
                 .response(
                   entryID: responseEntryID,
-                  action: .updateCustomSegment(fileDataPart)
+                  action: .updateMetadata([
+                    "fileDataURI": fileDataPart.uri,
+                    "fileDataMIMEType": fileDataPart.mimeType,
+                  ])
                 )
               )
             case let functionCallPart as FunctionCallPart:
@@ -407,14 +427,20 @@ import FoundationModels
               await channel.send(
                 .response(
                   entryID: responseEntryID,
-                  action: .updateCustomSegment(executableCodePart)
+                  action: .appendText(
+                    executableCodePart.code,
+                    tokenCount: 0
+                  )
                 )
               )
             case let codeExecutionResultPart as CodeExecutionResultPart:
               await channel.send(
                 .response(
                   entryID: responseEntryID,
-                  action: .updateCustomSegment(codeExecutionResultPart)
+                  action: .appendText(
+                    codeExecutionResultPart.output ?? "",
+                    tokenCount: 0
+                  )
                 )
               )
             default:
@@ -430,21 +456,24 @@ import FoundationModels
           }
 
           // Handle additional metadata from the candidate
-          var updatedMetadata: [String: any Sendable & Codable & Equatable] = [:]
+          var updatedMetadata: [String: any ConvertibleToGeneratedContent] = [:]
           if let groundingMetadata = candidate.groundingMetadata {
-            updatedMetadata[CandidateKeys.groundingMetadata] = groundingMetadata
+            updatedMetadata[CandidateKeys.groundingMetadata] = Executor
+              .metadataValue(groundingMetadata)
           }
 
           if let citationMetadata = candidate.citationMetadata {
-            updatedMetadata[CandidateKeys.citationMetadata] = citationMetadata
+            updatedMetadata[CandidateKeys.citationMetadata] = Executor
+              .metadataValue(citationMetadata)
           }
 
           if let urlContextMetadata = candidate.urlContextMetadata {
-            updatedMetadata[CandidateKeys.urlContextMetadata] = urlContextMetadata
+            updatedMetadata[CandidateKeys.urlContextMetadata] = Executor
+              .metadataValue(urlContextMetadata)
           }
 
           if let finishReason = candidate.finishReason {
-            updatedMetadata[CandidateKeys.finishReason] = finishReason
+            updatedMetadata[CandidateKeys.finishReason] = Executor.metadataValue(finishReason)
           }
 
           if let finishMessage = candidate.finishMessage {
@@ -452,7 +481,8 @@ import FoundationModels
           }
 
           if !candidate.safetyRatings.isEmpty {
-            updatedMetadata[CandidateKeys.safetyRatings] = candidate.safetyRatings
+            updatedMetadata[CandidateKeys.safetyRatings] = Executor
+              .metadataValue(candidate.safetyRatings)
           }
 
           if !updatedMetadata.isEmpty {
@@ -555,13 +585,6 @@ import FoundationModels
               debugDescription: "Unsupported attachment segment in instructions: \(attachment)"
             )
           )
-        case let .custom(customSegment):
-          throw LanguageModelError.unsupportedTranscriptContent(
-            LanguageModelError.UnsupportedTranscriptContent(
-              unsupportedContent: [Transcript.Entry.instructions(self)],
-              debugDescription: "Unsupported custom segment in instructions: \(customSegment)"
-            )
-          )
         @unknown default:
           // TODO: Determine whether to throw
           AILog.warning(
@@ -612,13 +635,6 @@ import FoundationModels
             )
             continue
           }
-        case let .custom(customSegment):
-          throw LanguageModelError.unsupportedTranscriptContent(
-            LanguageModelError.UnsupportedTranscriptContent(
-              unsupportedContent: [Transcript.Entry.prompt(self)],
-              debugDescription: "Unsupported custom segment in prompt: \(customSegment)"
-            )
-          )
         @unknown default:
           // TODO: Determine whether to throw
           AILog.warning(
@@ -656,13 +672,6 @@ import FoundationModels
             LanguageModelError.UnsupportedTranscriptContent(
               unsupportedContent: [Transcript.Entry.response(self)],
               debugDescription: "Unsupported attachment segment in response: \(attachment)"
-            )
-          )
-        case let .custom(customSegment):
-          throw LanguageModelError.unsupportedTranscriptContent(
-            LanguageModelError.UnsupportedTranscriptContent(
-              unsupportedContent: [Transcript.Entry.response(self)],
-              debugDescription: "Unsupported custom segment in response: \(customSegment)"
             )
           )
         @unknown default:
