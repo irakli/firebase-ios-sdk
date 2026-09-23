@@ -340,6 +340,27 @@ final class GenerationConfigTests: XCTestCase {
 
   // MARK: - GenerationConfig Merging
 
+  func testEncodeGenerationConfig_seed() throws {
+    let generationConfig = GenerationConfig(seed: 1)
+    let jsonData = try encoder.encode(generationConfig)
+    let json = try XCTUnwrap(String(data: jsonData, encoding: .utf8))
+    XCTAssertEqual(json, """
+    {
+      "seed" : 1
+    }
+    """)
+  }
+
+  func testMerge_seed() throws {
+    let base = GenerationConfig(seed: 1)
+
+    let overridden = try XCTUnwrap(GenerationConfig.merge(base, with: GenerationConfig(seed: 7)))
+    XCTAssertEqual(overridden.seed, 7)
+
+    let fallback = try XCTUnwrap(GenerationConfig.merge(base, with: GenerationConfig(temperature: 0.5)))
+    XCTAssertEqual(fallback.seed, 1)
+  }
+
   func testMerge_bothNil() {
     let result = GenerationConfig.merge(nil, with: nil)
 
