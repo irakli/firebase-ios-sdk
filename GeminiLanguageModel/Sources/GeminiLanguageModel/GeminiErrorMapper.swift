@@ -81,31 +81,31 @@
           )
         )
 
-      case GeminiAPIError.httpError(let statusCode, let body):
+      case GeminiAPIError.httpError(let statusCode):
         switch statusCode {
         case 429:
           return LanguageModelError.rateLimited(
             LanguageModelError.RateLimited(
               resetDate: nil,
-              debugDescription: "HTTP 429: \(body)"
+              debugDescription: "HTTP 429"
             )
           )
         case 404:
           return GeminiLanguageModel.Error.modelNotFound(
             GeminiLanguageModel.Error.ModelNotFound(
-              debugDescription: "HTTP 404: \(body)"
+              debugDescription: "HTTP 404"
             )
           )
         case 503:
           return GeminiLanguageModel.Error.serviceUnavailable(
             GeminiLanguageModel.Error.ServiceUnavailable(
-              debugDescription: "Gemini service is unavailable (HTTP 503): \(body)"
+              debugDescription: "Gemini service is unavailable (HTTP 503)"
             )
           )
         default:
           return GeminiLanguageModel.Error.networkFailure(
             GeminiLanguageModel.Error.NetworkFailure(
-              debugDescription: "Gemini HTTP error (status \(statusCode)): \(body)"
+              debugDescription: "Gemini HTTP error (status \(statusCode))"
             )
           )
         }

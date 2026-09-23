@@ -59,7 +59,7 @@ struct GeminiAPIErrorTests {
     let apiErrorWithOverride = GeminiAPIError.apiError(
       cloudErrorWithDelay.withRetryDelay(.seconds(60)))
     let apiErrorWithoutOverride = GeminiAPIError.apiError(cloudErrorWithDelay)
-    let httpError = GeminiAPIError.httpError(statusCode: 500, body: "Server error")
+    let httpError = GeminiAPIError.httpError(statusCode: 500)
 
     #expect(apiErrorWithOverride.retryAfter == .seconds(60))
     #expect(apiErrorWithoutOverride.retryAfter == .seconds(30))
@@ -87,7 +87,7 @@ struct GeminiAPIErrorTests {
     )
 
     let apiError = GeminiAPIError.apiError(cloudError)
-    let httpError = GeminiAPIError.httpError(statusCode: 503, body: "Service unavailable")
+    let httpError = GeminiAPIError.httpError(statusCode: 503)
 
     #expect(apiError.errorDescription == "Localized argument error")
     #expect(apiError.failureReason == "INVALID_ARGUMENT")
@@ -98,11 +98,11 @@ struct GeminiAPIErrorTests {
     #expect(apiError.errorUserInfo["status"] as? String == "INVALID_ARGUMENT")
     #expect(apiError.errorUserInfo["retryAfterSeconds"] as? Double == 15.0)
 
-    #expect(httpError.errorDescription == "HTTP 503: Service unavailable")
+    #expect(httpError.errorDescription == "HTTP 503")
     #expect(httpError.failureReason == "HTTP status 503")
     #expect(httpError.helpAnchor == nil)
     #expect(httpError.errorCode == 503)
     #expect(httpError.errorUserInfo["statusCode"] as? Int == 503)
-    #expect(httpError.errorUserInfo["body"] as? String == "Service unavailable")
+    #expect(httpError.errorUserInfo["body"] == nil)
   }
 }

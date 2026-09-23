@@ -307,10 +307,7 @@ private func parseError(
     let resolvedError = headerRetryAfter.map { apiError.withRetryDelay($0) } ?? apiError
     return GeminiAPIError.apiError(resolvedError)
   } else {
-    return GeminiAPIError.httpError(
-      statusCode: statusCode,
-      body: String(decoding: data, as: UTF8.self)
-    )
+    return GeminiAPIError.httpError(statusCode: statusCode)
   }
 }
 

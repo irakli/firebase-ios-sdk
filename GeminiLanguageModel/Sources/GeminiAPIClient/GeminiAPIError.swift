@@ -25,8 +25,9 @@ package enum GeminiAPIError: Error, Sendable, Equatable {
   /// An API error returned by the Google Gemini service conforming to AIP-0193.
   case apiError(GoogleCloudAPIError)
 
-  /// An HTTP failure status code with a raw response body.
-  case httpError(statusCode: Int, body: String)
+  /// An HTTP failure status code. The response body is deliberately not retained: an unparsed body can
+  /// echo prompts or carry model output, and an error value travels into logs and diagnostics.
+  case httpError(statusCode: Int)
 }
 
 @available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, visionOS 2.0, *)
@@ -50,8 +51,8 @@ extension GeminiAPIError: LocalizedError {
     switch self {
     case .apiError(let error):
       error.errorDescription
-    case .httpError(let statusCode, let body):
-      "HTTP \(statusCode): \(body)"
+    case .httpError(let statusCode):
+      "HTTP \(statusCode)"
     }
   }
 
@@ -59,7 +60,7 @@ extension GeminiAPIError: LocalizedError {
     switch self {
     case .apiError(let error):
       error.failureReason
-    case .httpError(let statusCode, _):
+    case .httpError(let statusCode):
       "HTTP status \(statusCode)"
     }
   }
@@ -80,7 +81,7 @@ extension GeminiAPIError: CustomNSError {
     switch self {
     case .apiError(let error):
       error.errorCode
-    case .httpError(let statusCode, _):
+    case .httpError(let statusCode):
       statusCode
     }
   }
@@ -89,11 +90,8 @@ extension GeminiAPIError: CustomNSError {
     switch self {
     case .apiError(let error):
       error.errorUserInfo
-    case .httpError(let statusCode, let body):
-      [
-        "statusCode": statusCode,
-        "body": body,
-      ]
+    case .httpError(let statusCode):
+      ["statusCode": statusCode]
     }
   }
 }

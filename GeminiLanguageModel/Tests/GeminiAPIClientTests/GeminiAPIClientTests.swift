@@ -240,9 +240,13 @@ struct GeminiAPIClientTests {
     do {
       _ = try await client.generateContentStream(for: request)
       Issue.record("Expected GeminiAPIError.httpError to be thrown")
-    } catch let GeminiAPIError.httpError(statusCode, body) {
+    } catch let error as GeminiAPIError {
+      guard case let .httpError(statusCode) = error else {
+        Issue.record("Expected GeminiAPIError.httpError, got: \(error)")
+        return
+      }
       #expect(statusCode == 500)
-      #expect(body == "Internal Server Error")
+      #expect(!String(describing: error).contains("Internal Server Error"))
     } catch {
       Issue.record("Unexpected error: \(error)")
     }
@@ -566,10 +570,14 @@ struct GeminiAPIClientTests {
         }
       }
       Issue.record("Expected GeminiAPIError.httpError to be thrown")
-    } catch let GeminiAPIError.httpError(statusCode, body) {
+    } catch let error as GeminiAPIError {
+      guard case let .httpError(statusCode) = error else {
+        Issue.record("Expected GeminiAPIError.httpError, got: \(error)")
+        return
+      }
       #expect(collectedText == "Hello")
       #expect(statusCode == 200)
-      #expect(body == "Unrecognized non-JSON error payload")
+      #expect(!String(describing: error).contains("Unrecognized non-JSON error payload"))
     } catch {
       Issue.record("Unexpected error thrown: \(error)")
     }

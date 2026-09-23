@@ -136,7 +136,7 @@
     @Test
     @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
     func mapServiceUnavailableFromHTTPError503() throws {
-      let httpError = GeminiAPIError.httpError(statusCode: 503, body: "Overloaded")
+      let httpError = GeminiAPIError.httpError(statusCode: 503)
 
       let mappedError = GeminiErrorMapper.map(httpError)
 
@@ -148,9 +148,7 @@
         Issue.record("Expected GeminiLanguageModel.Error.serviceUnavailable, got: \(mappedError)")
         return
       }
-      if case GeminiAPIError.httpError(_, let body) = httpError {
-        #expect(serviceUnavailable.debugDescription.contains(body))
-      }
+      #expect(serviceUnavailable.debugDescription.contains("503"))
     }
 
     @Test
@@ -203,7 +201,7 @@
     @Test
     @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
     func mapNetworkFailureFromHTTPError() throws {
-      let httpError = GeminiAPIError.httpError(statusCode: 502, body: "Bad Gateway")
+      let httpError = GeminiAPIError.httpError(statusCode: 502)
 
       let mappedError = GeminiErrorMapper.map(httpError)
 
@@ -215,9 +213,7 @@
         Issue.record("Expected GeminiLanguageModel.Error.networkFailure, got: \(mappedError)")
         return
       }
-      if case GeminiAPIError.httpError(_, let body) = httpError {
-        #expect(networkFailure.debugDescription.contains(body))
-      }
+      #expect(networkFailure.debugDescription.contains("502"))
     }
 
     @Test
@@ -377,7 +373,7 @@
     @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
     func mapRateLimitFromHTTP429() {
       let mappedError = GeminiErrorMapper.map(
-        GeminiAPIError.httpError(statusCode: 429, body: "Too many requests")
+        GeminiAPIError.httpError(statusCode: 429)
       )
 
       if case LanguageModelError.rateLimited(let rateLimited) = mappedError {
@@ -391,7 +387,7 @@
     @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
     func mapModelNotFoundFromHTTP404() {
       let mappedError = GeminiErrorMapper.map(
-        GeminiAPIError.httpError(statusCode: 404, body: "Not found")
+        GeminiAPIError.httpError(statusCode: 404)
       )
 
       if case GeminiLanguageModel.Error.modelNotFound(let modelNotFound) = mappedError {
